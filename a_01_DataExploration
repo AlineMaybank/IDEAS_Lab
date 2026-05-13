@@ -12,13 +12,15 @@ knitr::opts_chunk$set(echo = TRUE)
 Purpose: the purpose of this script is to explore the data available through the IDEAS Lab excel document: Qualtrics Survey_Cleaned_Feb172026.xlsx
 
 # Packages
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(readxl)
 library(janitor)
 library(ggplot2)
 library(leaflet)
 library(sf)
+library(knitr)
+library(kableExtra)
 ```
 
 # Read in Qualtrics Dataset
@@ -110,9 +112,9 @@ survey <- survey |>
   }))
 
 # Spot check
-survey |> distinct(education_in_canada)
-survey |> distinct(monthly_income)
-survey |> distinct(accommodation_type)
+survey |> distinct(education_in_canada) |> kable()
+survey |> distinct(monthly_income) |> kable()
+survey |> distinct(accommodation_type) |> kable()
 ```
 
 # Completeness
@@ -122,37 +124,52 @@ survey |>
   pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
   mutate(pct_missing = round(n_missing / nrow(survey) * 100, 1)) |>
   arrange(desc(n_missing)) |>
-  print(n = Inf)
+  kable(caption = "Missing Data Summary") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
 # Geographic Distributions
 ```{r}
-survey |> count(city, sort = TRUE) |> print(n = Inf)
-survey |> count(province, sort = TRUE)
-survey |> count(institution, sort = TRUE)
+survey |> count(city, sort = TRUE) |> kable(caption = "City Counts")
+
+survey |> count(province, sort = TRUE) |> kable(caption = "Province Counts")
+
+survey |> count(institution, sort = TRUE) |> kable(caption = "Institution Counts")
 
 survey |>
   summarise(
     n_have_postal  = sum(!is.na(postal_code)),
     n_have_latlong = sum(!is.na(latitude) & !is.na(longitude)),
     n_total        = n()
-  )
+  ) |>
+  kable(caption = "Geocoding Coverage")
 ```
 
 # Socio-Demographic Distributions
 ```{r}
-survey |> count(country_of_origin, sort = TRUE)  |> print(n = Inf)
-survey |> count(ethnic_origin, sort = TRUE)       |> print(n = Inf)
-survey |> count(gender_identity, sort = TRUE)
-survey |> count(sexual_orientation, sort = TRUE)
-survey |> count(marital_status, sort = TRUE)
-survey |> count(language_home, sort = TRUE)       |> print(n = Inf)
-survey |> count(monthly_income, sort = TRUE)
-survey |> count(degree_currently_studying, sort = TRUE)
-survey |> count(accommodation_type, sort = TRUE)
-survey |> count(duration_current_address, sort = TRUE) |> print(n = Inf)
-survey |> count(direct_from_home_country)
-survey |> count(year_immigrated, sort = TRUE)
+survey |> count(country_of_origin, sort = TRUE)        |> kable(caption = "Country of Origin")
+
+survey |> count(ethnic_origin, sort = TRUE)             |> kable(caption = "Ethnic Origin")
+
+survey |> count(gender_identity, sort = TRUE)           |> kable(caption = "Gender Identity")
+
+survey |> count(sexual_orientation, sort = TRUE)        |> kable(caption = "Sexual Orientation")
+
+survey |> count(marital_status, sort = TRUE)            |> kable(caption = "Marital Status")
+
+survey |> count(language_home, sort = TRUE)             |> kable(caption = "Language Spoken at Home")
+
+survey |> count(monthly_income, sort = TRUE)            |> kable(caption = "Monthly Income")
+
+survey |> count(degree_currently_studying, sort = TRUE) |> kable(caption = "Degree Currently Studying")
+
+survey |> count(accommodation_type, sort = TRUE)        |> kable(caption = "Accommodation Type")
+
+survey |> count(duration_current_address, sort = TRUE)  |> kable(caption = "Duration at Current Address")
+
+survey |> count(direct_from_home_country)               |> kable(caption = "Direct from Home Country")
+
+survey |> count(year_immigrated, sort = TRUE)           |> kable(caption = "Year Immigrated")
 
 survey |>
   summarise(
@@ -162,7 +179,8 @@ survey |>
     min_age   = min(age, na.rm = TRUE),
     max_age   = max(age, na.rm = TRUE),
     n_missing = sum(is.na(age))
-  )
+  ) |>
+  kable(caption = "Age Summary Statistics")
 
 survey <- survey |>
   mutate(
@@ -173,7 +191,7 @@ survey <- survey |>
   )
 
 # Spot check
-survey |> count(country_of_origin, sort = TRUE) |> print(n = Inf)
+survey |> count(country_of_origin, sort = TRUE) |> kable(caption = "Country of Origin (Post-Recode Spot Check)")
 ```
 
 # Visualizations: Geographic
