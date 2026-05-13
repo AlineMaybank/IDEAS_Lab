@@ -1,0 +1,356 @@
+---
+title: "a_01_DataExploration"
+author: "Aline Maybank"
+date: "2026-05-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: the purpose of this script is to explore the data available through the IDEAS Lab excel document: Qualtrics Survey_Cleaned_Feb172026.xlsx
+
+# Packages
+```{r}
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(ggplot2)
+library(leaflet)
+library(sf)
+```
+
+# Read in Qualtrics Dataset
+```{r}
+survey_raw <- read_excel("Qualtrics_Survey_Cleaned_Feb172026_47rows.xlsx", sheet = 1) |>
+  clean_names()
+```
+
+# Explore Raw Structure
+```{r}
+dim(survey_raw)
+colnames(survey_raw)
+glimpse(survey_raw)
+```
+
+# Save Codebook from Row 1 Labels
+```{r}
+question_labels <- survey_raw |>
+  slice(1) |>
+  pivot_longer(everything(), names_to = "col_code", values_to = "question_text")
+
+write_csv(question_labels, "codebook_question_labels.csv")
+```
+
+# Clean & Rename
+```{r}
+survey <- survey_raw |>
+  slice(-1) |>
+  rename(
+    name                      = qid57,
+    institution               = qid10,
+    country_of_origin         = q1,
+    ethnic_origin             = q2,
+    ethnic_origin_other       = q2a,
+    language_home             = q3,
+    sexual_orientation        = q4,
+    sexual_orientation_other  = q4a,
+    gender_identity           = q5,
+    gender_identity_other     = q5a,
+    age                       = q6,
+    year_immigrated           = q7,
+    duration_in_province      = q8,
+    current_address           = q9,
+    postal_code               = q9_1,
+    city                      = q9_2,
+    province                  = q9_3,
+    latitude                  = q9_4,
+    longitude                 = q9_5,
+    accommodation_type        = q10,
+    accommodation_other       = q10a,
+    duration_current_address  = q11,
+    first_address_canada      = q12,
+    direct_from_home_country  = q13,
+    country_before_canada     = q14,
+    marital_status            = q15,
+    education_outside_canada  = q16,
+    education_outside_other   = q16a,
+    country_education_outside = q17,
+    field_outside_canada      = q18,
+    field_in_canada           = q19,
+    education_in_canada       = q20,
+    education_in_canada_other = q20a,
+    degree_currently_studying = q21,
+    degree_other              = q21a,
+    monthly_income            = q22
+  ) |>
+  mutate(
+    age             = as.numeric(age),
+    latitude        = as.numeric(latitude),
+    longitude       = as.numeric(longitude),
+    # coerce year — free text entries like "2013, 2017, 2023" become NA
+    year_immigrated = as.numeric(year_immigrated),
+    year_immigrated = if_else(year_immigrated < 1990, NA_real_, year_immigrated)
+  )
+
+glimpse(survey)
+nrow(survey)  # should be 45
+```
+
+# Fix Encoding
+```{r}
+survey <- survey |>
+  mutate(across(where(is.character), \(x) {
+    x |>
+      str_replace_all("\u00e2\u0080\u0099", "'")  |>  # curly apostrophe
+      str_replace_all("\u00e2\u0080\u0093", "\u2013") |>  # en-dash
+      str_replace_all("\u00e2\u0080\u009c", "\u201c") |>  # left quote
+      str_replace_all("\u00e2\u0080\u009d", "\u201d")     # right quote
+  }))
+
+# Spot check
+survey |> distinct(education_in_canada)
+survey |> distinct(monthly_income)
+survey |> distinct(accommodation_type)
+```
+
+# Completeness
+```{r}
+survey |>
+  summarise(across(everything(), \(x) sum(is.na(x)))) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
+  mutate(pct_missing = round(n_missing / nrow(survey) * 100, 1)) |>
+  arrange(desc(n_missing)) |>
+  print(n = Inf)
+```
+
+# Geographic Distributions
+```{r}
+survey |> count(city, sort = TRUE) |> print(n = Inf)
+survey |> count(province, sort = TRUE)
+survey |> count(institution, sort = TRUE)
+
+survey |>
+  summarise(
+    n_have_postal  = sum(!is.na(postal_code)),
+    n_have_latlong = sum(!is.na(latitude) & !is.na(longitude)),
+    n_total        = n()
+  )
+```
+
+# Socio-Demographic Distributions
+```{r}
+survey |> count(country_of_origin, sort = TRUE)  |> print(n = Inf)
+survey |> count(ethnic_origin, sort = TRUE)       |> print(n = Inf)
+survey |> count(gender_identity, sort = TRUE)
+survey |> count(sexual_orientation, sort = TRUE)
+survey |> count(marital_status, sort = TRUE)
+survey |> count(language_home, sort = TRUE)       |> print(n = Inf)
+survey |> count(monthly_income, sort = TRUE)
+survey |> count(degree_currently_studying, sort = TRUE)
+survey |> count(accommodation_type, sort = TRUE)
+survey |> count(duration_current_address, sort = TRUE) |> print(n = Inf)
+survey |> count(direct_from_home_country)
+survey |> count(year_immigrated, sort = TRUE)
+
+survey |>
+  summarise(
+    n         = sum(!is.na(age)),
+    mean_age  = mean(age, na.rm = TRUE),
+    sd_age    = sd(age, na.rm = TRUE),
+    min_age   = min(age, na.rm = TRUE),
+    max_age   = max(age, na.rm = TRUE),
+    n_missing = sum(is.na(age))
+  )
+
+survey <- survey |>
+  mutate(
+    country_of_origin = case_when(
+      str_detect(str_to_lower(country_of_origin), "united state") ~ "United States of America",
+      .default = country_of_origin
+    )
+  )
+
+# Spot check
+survey |> count(country_of_origin, sort = TRUE) |> print(n = Inf)
+```
+
+# Visualizations: Geographic
+```{r}
+# City
+survey |>
+  filter(!is.na(city)) |>
+  count(city, sort = TRUE) |>
+  ggplot(aes(x = n, y = fct_reorder(city, n))) +
+  geom_col(fill = "#4a8fa8") +
+  geom_text(aes(label = n), hjust = -0.2, size = 3.5) +
+  labs(title = "Participants by City", x = "Count", y = NULL) +
+  theme_minimal() +
+  expand_limits(x = c(0, 35))
+
+# Province
+survey |>
+  filter(!is.na(province)) |>
+  count(province, sort = TRUE) |>
+  ggplot(aes(x = n, y = fct_reorder(province, n))) +
+  geom_col(fill = "#5a9e6f") +
+  geom_text(aes(label = n), hjust = -0.2, size = 3.5) +
+  labs(title = "Participants by Province", x = "Count", y = NULL) +
+  theme_minimal() +
+  expand_limits(x = c(0, 50))
+```
+
+# Visualizations: Socio-Demographics
+```{r}
+# Country of origin — pie chart
+country_counts <- survey |>
+  filter(!is.na(country_of_origin)) |>
+  count(country_of_origin, sort = TRUE) |>
+  mutate(
+    pct   = round(n / sum(n) * 100, 1),
+    label = if_else(pct >= 4, paste0(country_of_origin, "\n", pct, "%"), "")
+  )
+
+ggplot(country_counts, aes(x = "", y = n, fill = country_of_origin)) +
+  geom_col(width = 1, colour = "white") +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = label),
+            position = position_stack(vjust = 0.5), size = 3) +
+  labs(title = "Country of Origin", fill = "Country") +
+  theme_void()
+
+# Ethnic origin
+survey |>
+  filter(!is.na(ethnic_origin)) |>
+  count(ethnic_origin, sort = TRUE) |>
+  mutate(pct = round(n / sum(n) * 100, 1)) |>
+  ggplot(aes(x = pct, y = fct_reorder(ethnic_origin, pct))) +
+  geom_col(fill = "#e07b54") +
+  geom_text(aes(label = paste0(pct, "%")), hjust = -0.2, size = 3.5) +
+  labs(title = "Ethnic Origin", x = "% of Participants", y = NULL) +
+  theme_minimal() +
+  expand_limits(x = c(0, 80))
+
+# Gender identity
+survey |>
+  filter(!is.na(gender_identity)) |>
+  count(gender_identity, sort = TRUE) |>
+  mutate(pct = round(n / sum(n) * 100, 1)) |>
+  ggplot(aes(x = pct, y = fct_reorder(gender_identity, pct))) +
+  geom_col(fill = "#7b68c8") +
+  geom_text(aes(label = paste0(pct, "%")), hjust = -0.2, size = 3.5) +
+  labs(title = "Gender Identity", x = "% of Participants", y = NULL) +
+  theme_minimal() +
+  expand_limits(x = c(0, 80))
+
+# Monthly income — ordered
+income_order <- c(
+  "Less than CAD833",
+  "CAD833 \u2013 1666",
+  "CAD1666 \u2013 2499",
+  "CAD2499 \u2013 3332",
+  "More than CAD3333"
+)
+
+survey |>
+  filter(!is.na(monthly_income)) |>
+  mutate(monthly_income = factor(monthly_income, levels = income_order)) |>
+  count(monthly_income) |>
+  mutate(pct = round(n / sum(n) * 100, 1)) |>
+  ggplot(aes(x = monthly_income, y = pct)) +
+  geom_col(fill = "#4a8fa8") +
+  geom_text(aes(label = paste0(pct, "%")), vjust = -0.4, size = 3.5) +
+  labs(title = "Monthly Income / Allowance", x = NULL, y = "% of Participants") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+# Age histogram
+ggplot(survey, aes(x = age)) +
+  geom_histogram(binwidth = 2, fill = "#4a8fa8", colour = "white") +
+  labs(title = "Age Distribution", x = "Age", y = "Count") +
+  theme_minimal()
+
+# Degree currently studying
+survey |>
+  filter(!is.na(degree_currently_studying)) |>
+  count(degree_currently_studying, sort = TRUE) |>
+  mutate(pct = round(n / sum(n) * 100, 1)) |>
+  ggplot(aes(x = pct, y = fct_reorder(degree_currently_studying, pct))) +
+  geom_col(fill = "#c8a44a") +
+  geom_text(aes(label = paste0(pct, "%")), hjust = -0.2, size = 3.5) +
+  labs(title = "Degree Currently Studying", x = "% of Participants", y = NULL) +
+  theme_minimal() +
+  expand_limits(x = c(0, 70))
+
+# Year of immigration
+survey |>
+  filter(!is.na(year_immigrated)) |>
+  ggplot(aes(x = year_immigrated)) +
+  geom_bar(fill = "#4a8fa8") +
+  scale_x_continuous(breaks = seq(2010, 2026, by = 1), limits = c(2010, 2026)) +
+  labs(title = "Year of Immigration to Canada", x = "Year", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Accommodation type
+survey |>
+  filter(!is.na(accommodation_type)) |>
+  count(accommodation_type, sort = TRUE) |>
+  mutate(pct = round(n / sum(n) * 100, 1)) |>
+  ggplot(aes(x = pct, y = fct_reorder(accommodation_type, pct))) +
+  geom_col(fill = "#5a9e6f") +
+  geom_text(aes(label = paste0(pct, "%")), hjust = -0.2, size = 3.5) +
+  labs(title = "Accommodation Type", x = "% of Participants", y = NULL) +
+  theme_minimal() +
+  expand_limits(x = c(0, 60))
+```
+
+# Interactive Leaflet Map
+```{r}
+map_data <- survey |>
+  filter(!is.na(latitude), !is.na(longitude)) |>
+  mutate(
+    popup_text = paste0(
+      "<b>City:</b> ", city, "<br>",
+      "<b>Province:</b> ", province, "<br>",
+      "<b>Institution:</b> ", institution, "<br>",
+      "<b>Accommodation:</b> ", accommodation_type, "<br>",
+      "<b>Country of Origin:</b> ", country_of_origin, "<br>",
+      "<b>Degree:</b> ", degree_currently_studying
+    )
+  )
+
+city_palette <- colorFactor(palette = "Set2", domain = map_data$city)
+
+leaflet(map_data) |>
+  addProviderTiles(providers$CartoDB.Positron) |>
+  addCircleMarkers(
+    lng         = ~longitude,
+    lat         = ~latitude,
+    color       = ~city_palette(city),
+    radius      = 7,
+    stroke      = FALSE,
+    fillOpacity = 0.8,
+    popup       = ~popup_text
+  ) |>
+  addLegend(
+    position = "bottomright",
+    pal      = city_palette,
+    values   = ~city,
+    title    = "City"
+  ) |>
+  setView(lng = -80.5, lat = 43.5, zoom = 7)
+```
+
+# Save Analytic Dataset
+```{r}
+# Remove direct identifiers before saving
+survey_analytic <- survey |>
+  select(-name, -current_address, -first_address_canada)
+
+saveRDS(survey_analytic, "survey_analytic.rds")
+write_csv(survey_analytic, "survey_analytic.csv")
+
+message("Saved: ", nrow(survey_analytic), " rows, ", ncol(survey_analytic), " columns")
+```
